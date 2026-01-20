@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ระบบทะเบียนคนไข้ </title>
+    <title>ระบบทะเบียนคนไข้ (Password Protected)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;800&display=swap" rel="stylesheet">
@@ -29,14 +29,14 @@
                     <i data-lucide="hospital" class="w-12 h-12 text-pink-600"></i>
                 </div>
             </div>
-            <h1 class="text-2xl font-bold text-gray-800 mb-2">ระบบทะเบียนผู้ป่วยและคัดกรองโรค</h1>
-            <p class="text-gray-500 mb-6">ระบบเวชระเบียน (เชื่อมต่อฐานข้อมูลจริง)</p>
+            <h1 class="text-2xl font-bold text-gray-800 mb-2">OPD Smart Registry</h1>
+            <p class="text-gray-500 mb-6">ระบบเวชระเบียน (Secure Access)</p>
             <div class="space-y-3">
                 <button onclick="switchRole('nurse')" class="w-full bg-pink-500 hover:bg-pink-600 text-white p-4 rounded-xl flex items-center justify-center gap-2 shadow-md font-semibold text-lg transition">
                     <i data-lucide="user-plus"></i> เข้าสู่ระบบ : เวชระเบียน/พยาบาล
                 </button>
                 <button onclick="switchRole('doctor')" class="w-full bg-blue-500 hover:bg-blue-600 text-white p-4 rounded-xl flex items-center justify-center gap-2 shadow-md font-semibold text-lg transition">
-                    <i data-lucide="stethoscope"></i> เข้าสู่ระบบ : แพทย์
+                    <i data-lucide="lock"></i> เข้าสู่ระบบ : แพทย์ (มีรหัสผ่าน)
                 </button>
             </div>
         </div>
@@ -237,6 +237,10 @@
         // ********* URL Apps Script ของคุณ *********
         const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzQezrmAeOJaousR4pYVCSVZrSUglvhuTryK3k4Q22lGJ6u8CnqvmqFdJcz_E1VSXqGeg/exec";
         
+        // ********* 🔑 ตั้งรหัสผ่านแพทย์ที่นี่ *********
+        const DOCTOR_PASSWORD = "1234";
+        // *****************************************
+
         let currentTriageLevel = 'gray';
         let refreshInterval;
 
@@ -244,10 +248,18 @@
 
         // --- NAVIGATION ---
         function switchRole(role) {
+            if (role === 'doctor') {
+                const pass = prompt("กรุณาระบุรหัสผ่านสำหรับแพทย์ (Password):");
+                if (pass !== DOCTOR_PASSWORD) {
+                    alert("⛔ รหัสผ่านไม่ถูกต้อง!");
+                    return;
+                }
+            }
+
             document.getElementById('view-login').classList.add('hidden');
             if(role === 'nurse') {
                 document.getElementById('view-nurse').classList.remove('hidden');
-                switchTab('screening'); // เริ่มที่หน้าคัดกรอง
+                switchTab('screening'); 
             } else {
                 document.getElementById('view-doctor').classList.remove('hidden');
                 fetchPatients();
@@ -434,15 +446,69 @@
                 const res = await fetch(SCRIPT_URL);
                 const data = await res.json();
                 const priority = { 'red': 3, 'yellow': 2, 'green': 1, 'gray': 0 };
-                const sorted = data.reverse().sort((a,b) => priority[b.triage] - priority[a.triage]);
+                
+                // Sort
+                const sorted = data.reverse().sort((a,b) => {
+                    const tA = a.triage || 'gray';
+                    const tB = b.triage || 'gray';
+                    return (priority[tB] || 0) - (priority[tA] || 0);
+                });
+
                 document.getElementById('patient-count').innerText = sorted.length;
+
+                if (sorted.length === 0) {
+                     document.getElementById('patient-list').innerHTML = '<div class="text-center py-20 text-gray-400">ยังไม่มีผู้ป่วยรอตรวจ</div>';
+                     return;
+                }
+
                 document.getElementById('patient-list').innerHTML = sorted.map(p => {
-                    let color = p.triage === 'red' ? 'red' : p.triage === 'yellow' ? 'yellow' : 'green';
-                    return `<div class="bg-white rounded-xl shadow-sm border-l-8 border-${color}-500 p-4 mb-3 flex gap-4"><div class="flex-col flex items-center justify-center w-16"><div class="w-10 h-10 rounded-full bg-${color}-500 text-white flex items-center justify-center font-bold">${p.triage[0].toUpperCase()}</div><span class="text-xs text-gray-400 mt-1 font-bold">${p.time}</span></div><div class="flex-1"><div class="font-bold text-lg">${p.name} <span class="text-sm font-normal text-gray-500">(${p.age} ปี)</span></div><div class="text-gray-600">${p.symptoms}</div><div class="mt-2 text-sm flex gap-2"><span class="bg-slate-100 px-2 rounded">BP: ${p.vitals.bp}</span><span class="bg-slate-100 px-2 rounded">T: ${p.vitals.temp}</span></div></div><button class="bg-blue-600 text-white px-4 rounded-lg self-center h-10 shadow">ตรวจ</button></div>`;
+                    const triage = p.triage || 'gray';
+                    const triageChar = triage.charAt(0).toUpperCase();
+                    
+                    // Define classes explicitly for Tailwind CDN to detect
+                    let borderClass = 'border-gray-300';
+                    let bgIconClass = 'bg-gray-400';
+                    
+                    if (triage === 'red') {
+                        borderClass = 'border-red-500';
+                        bgIconClass = 'bg-red-500';
+                    } else if (triage === 'yellow') {
+                        borderClass = 'border-yellow-500';
+                        bgIconClass = 'bg-yellow-500';
+                    } else if (triage === 'green') {
+                        borderClass = 'border-green-500';
+                        bgIconClass = 'bg-green-500';
+                    }
+
+                    return `
+                    <div class="bg-white rounded-xl shadow-sm border-l-8 ${borderClass} p-4 mb-3 flex gap-4 hover:shadow-md transition">
+                        <div class="flex-col flex items-center justify-center w-16">
+                            <div class="w-12 h-12 rounded-full ${bgIconClass} text-white flex items-center justify-center font-bold text-xl shadow-sm">
+                                ${triageChar}
+                            </div>
+                            <span class="text-xs text-gray-500 mt-2 font-bold">${p.time}</span>
+                        </div>
+                        <div class="flex-1">
+                            <div class="flex items-center gap-2">
+                                <h3 class="font-bold text-lg text-gray-800">${p.name}</h3>
+                                <span class="text-sm text-gray-500 font-normal">(${p.age} ปี)</span>
+                            </div>
+                            <div class="text-gray-600 mb-2">${p.symptoms}</div>
+                            <div class="flex gap-2 text-sm">
+                                <span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">BP: ${p.vitals?.bp || '-'}</span>
+                                <span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">Temp: ${p.vitals?.temp || '-'}</span>
+                            </div>
+                        </div>
+                        <button class="bg-blue-600 hover:bg-blue-700 text-white px-6 rounded-lg self-center h-10 shadow font-semibold transition">
+                            ตรวจ
+                        </button>
+                    </div>`;
                 }).join('');
-            } catch(e) { console.error(e); }
+            } catch(e) { 
+                console.error(e);
+                document.getElementById('patient-list').innerHTML = `<div class="text-center text-red-500 py-10">เกิดข้อผิดพลาด: ${e.message}</div>`;
+            }
         }
     </script>
 </body>
-
 </html>
