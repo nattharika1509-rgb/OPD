@@ -1,169 +1,515 @@
-// กำหนดชื่อ Sheet ที่จะใช้เป็นฐานข้อมูล
-const SHEET_PATIENTS = "Patients";
-const SHEET_VISITS = "Visits";
-
-// ฟังก์ชันเริ่มต้น (ตั้งค่า Sheet อัตโนมัติถ้ายังไม่มี)
-function setup() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  // สร้างชีต Patients ถ้ายังไม่มี
-  if (!ss.getSheetByName(SHEET_PATIENTS)) {
-    const sheet = ss.insertSheet(SHEET_PATIENTS);
-    sheet.appendRow(["Timestamp", "CID", "Name", "DOB", "Age", "Gender", "Phone", "Rights", "Congenital", "Allergy"]);
-    sheet.getRange("A1:J1").setFontWeight("bold").setBackground("#fce7f3");
-  }
-  
-  // สร้างชีต Visits ถ้ายังไม่มี
-  if (!ss.getSheetByName(SHEET_VISITS)) {
-    const sheet = ss.insertSheet(SHEET_VISITS);
-    sheet.appendRow(["Timestamp", "Time", "Name", "Age", "Gender", "Symptoms", "Triage", "BP", "Temp", "PR", "RR", "Pain Score", "Status"]);
-    sheet.getRange("A1:M1").setFontWeight("bold").setBackground("#dbeafe");
-  }
-}
-
-// -------------------------------------------------------------
-// จัดการ HTTP GET (การดึงข้อมูล และ การค้นหา)
-// -------------------------------------------------------------
-function doGet(e) {
-  // รัน setup อัตโนมัติในครั้งแรก
-  setup();
-  
-  const action = e.parameter.action;
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  try {
-    // 1. ค้นหาประวัติคนไข้เก่า
-    if (action === 'search') {
-      const keyword = e.parameter.keyword.toString().toLowerCase();
-      const sheet = ss.getSheetByName(SHEET_PATIENTS);
-      const data = sheet.getDataRange().getValues();
-      const headers = data[0];
-      
-      let results = [];
-      // วนลูปเริ่มจากบรรทัดที่ 2 (ข้าม Header)
-      for (let i = 1; i < data.length; i++) {
-        const row = data[i];
-        const cid = row[1].toString();
-        const name = row[2].toString().toLowerCase();
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบทะเบียนคนไข้</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Sarabun', sans-serif; }
+        .hidden { display: none !important; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .animate-spin { animation: spin 1s linear infinite; }
+        .tab-active { border-bottom: 3px solid #db2777; color: #db2777; font-weight: bold; }
+        .tab-inactive { color: #6b7280; }
         
-        // ถ้า CID หรือ ชื่อ มีคำที่ค้นหา
-        if (cid.includes(keyword) || name.includes(keyword)) {
-          results.push({
-            cid: row[1],
-            name: row[2],
-            age: row[4],
-            gender: row[5],
-            congenital: row[8],
-            allergy: row[9]
-          });
-        }
-      }
-      return createJsonResponse({ result: "success", data: results });
-    }
-    
-    // 2. ดึงคิวตรวจสำหรับหน้าแพทย์ (ค่าเริ่มต้นเมื่อไม่มี action)
-    else {
-      const sheet = ss.getSheetByName(SHEET_VISITS);
-      const data = sheet.getDataRange().getValues();
-      
-      let visits = [];
-      for (let i = 1; i < data.length; i++) {
-        const row = data[i];
-        const status = row[12];
+        /* Animation สำหรับผลการค้นหา */
+        .search-result-item:hover { background-color: #fce7f3; cursor: pointer; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+
+    <!-- LOGIN SCREEN -->
+    <div id="view-login" class="min-h-screen bg-pink-50 flex items-center justify-center p-4">
+        <div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md text-center border border-pink-100">
+            <div class="flex justify-center mb-4">
+                <div class="bg-pink-100 p-4 rounded-full">
+                    <i data-lucide="hospital" class="w-12 h-12 text-pink-600"></i>
+                </div>
+            </div>
+            <h1 class="text-2xl font-bold text-gray-800 mb-2">ระบบทะเบียนคนไข้</h1>
+            <p class="text-gray-500 mb-6">ระบบเวชระเบียน</p>
+            <div class="space-y-3">
+                <button onclick="switchRole('nurse')" class="w-full bg-pink-500 hover:bg-pink-600 text-white p-4 rounded-xl flex items-center justify-center gap-2 shadow-md font-semibold text-lg transition">
+                    <i data-lucide="user-plus"></i> เข้าสู่ระบบ : เวชระเบียน/พยาบาล
+                </button>
+                <button onclick="switchRole('doctor')" class="w-full bg-blue-500 hover:bg-blue-600 text-white p-4 rounded-xl flex items-center justify-center gap-2 shadow-md font-semibold text-lg transition">
+                    <i data-lucide="lock"></i> เข้าสู่ระบบ : แพทย์ 
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- NURSE SCREEN -->
+    <div id="view-nurse" class="hidden min-h-screen pb-20">
+        <!-- Header -->
+        <div class="bg-white shadow-sm p-4 sticky top-0 z-10 flex justify-between items-center border-b">
+            <div class="flex items-center gap-2 text-pink-600 font-bold text-lg">
+                <i data-lucide="clipboard-list"></i> จุดคัดกรอง
+            </div>
+            <button onclick="logout()" class="text-gray-500 hover:text-red-500"><i data-lucide="log-out"></i></button>
+        </div>
+
+        <!-- TABS -->
+        <div class="bg-white shadow-sm mb-4">
+            <div class="flex max-w-2xl mx-auto">
+                <button onclick="switchTab('register')" id="btn-tab-register" class="flex-1 p-4 text-center tab-active transition">
+                    <i data-lucide="user-plus" class="inline w-4 h-4 mr-1"></i> ลงทะเบียนใหม่
+                </button>
+                <button onclick="switchTab('screening')" id="btn-tab-screening" class="flex-1 p-4 text-center tab-inactive transition">
+                    <i data-lucide="activity" class="inline w-4 h-4 mr-1"></i> คัดกรอง (ค้นหา)
+                </button>
+            </div>
+        </div>
+
+        <!-- FORM CONTAINER -->
+        <div class="max-w-2xl mx-auto px-4">
+            
+            <!-- 1. FORM: REGISTER -->
+            <form id="form-register" onsubmit="submitRegister(event)" class="bg-white rounded-2xl shadow-sm p-6 space-y-5 relative">
+                <h3 class="text-gray-700 font-bold border-b pb-2 flex items-center gap-2">
+                    <i data-lucide="file-plus" class="text-pink-500"></i> ข้อมูลผู้ป่วยใหม่
+                </h3>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="col-span-2">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">เลขบัตรประชาชน</label>
+                        <input type="text" name="cid" maxlength="13" required class="w-full p-3 bg-gray-50 rounded-lg border focus:ring-2 focus:ring-pink-300 outline-none" placeholder="x-xxxx-xxxxx-xx-x">
+                    </div>
+                    <div class="col-span-2">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">ชื่อ-นามสกุล</label>
+                        <input type="text" name="name" required class="w-full p-3 bg-gray-50 rounded-lg border focus:ring-2 focus:ring-pink-300 outline-none" placeholder="ระบุคำนำหน้าและชื่อ...">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">วันเกิด</label>
+                        <input type="date" name="dob" id="reg_dob" onchange="calculateAge()" required class="w-full p-3 bg-gray-50 rounded-lg border">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">อายุ</label>
+                        <input type="number" name="age" id="reg_age" readonly class="w-full p-3 bg-gray-100 rounded-lg border text-gray-500 cursor-not-allowed">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">เพศ</label>
+                        <select name="gender" class="w-full p-3 bg-gray-50 rounded-lg border">
+                            <option>ชาย</option>
+                            <option>หญิง</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">เบอร์โทรศัพท์</label>
+                        <input type="tel" name="phone" class="w-full p-3 bg-gray-50 rounded-lg border" placeholder="0xx-xxxxxxx">
+                    </div>
+                    <div class="col-span-2">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">สิทธิการรักษา</label>
+                        <select name="rights" class="w-full p-3 bg-gray-50 rounded-lg border">
+                            <option value="UCS">บัตรทอง (30 บาท)</option>
+                            <option value="SSS">ประกันสังคม</option>
+                            <option value="OFC">ข้าราชการ/รัฐวิสาหกิจ</option>
+                            <option value="CASH">ชำระเงินเอง</option>
+                        </select>
+                    </div>
+                    <div class="col-span-2">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">โรคประจำตัว</label>
+                        <input type="text" name="congenital" class="w-full p-3 bg-gray-50 rounded-lg border" placeholder="-">
+                    </div>
+                    <div class="col-span-2">
+                        <label class="block text-sm font-medium text-red-600 mb-1">ประวัติแพ้ยา !</label>
+                        <input type="text" name="allergy" class="w-full p-3 bg-red-50 border border-red-200 rounded-lg text-red-800 placeholder-red-300" placeholder="-">
+                    </div>
+                </div>
+                <button type="submit" class="w-full bg-pink-600 text-white p-4 rounded-xl font-bold text-lg shadow hover:bg-pink-700 flex justify-center gap-2">
+                    <i data-lucide="save"></i> บันทึกทะเบียนประวัติ
+                </button>
+            </form>
+
+            <!-- 2. FORM: SCREENING -->
+            <form id="form-screening" onsubmit="submitScreening(event)" class="hidden bg-white rounded-2xl shadow-sm p-6 space-y-6 relative">
+                
+                <!-- SEARCH BOX (Real API) -->
+                <div class="bg-blue-50 p-4 rounded-xl border border-blue-100 mb-6">
+                    <h3 class="text-blue-800 font-bold mb-2 flex items-center gap-2">
+                        <i data-lucide="search" class="w-4 h-4"></i> ค้นหาประวัติเก่า
+                    </h3>
+                    <div class="flex gap-2 relative">
+                        <input type="text" id="search_input" class="w-full p-3 rounded-lg border border-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-300" placeholder="พิมพ์ชื่อ หรือ เลขบัตรประชาชน...">
+                        <button type="button" onclick="searchPatient()" class="bg-blue-600 text-white px-4 rounded-lg font-bold hover:bg-blue-700">ค้นหา</button>
+                    </div>
+                    <div id="search_status" class="text-xs text-blue-600 mt-1 hidden">กำลังค้นหา...</div>
+                    
+                    <!-- Search Results -->
+                    <div id="search_results" class="hidden mt-2 bg-white rounded-lg shadow-lg border border-gray-200 divide-y max-h-60 overflow-y-auto z-20 relative">
+                    </div>
+                </div>
+
+                <h3 class="text-gray-700 font-bold border-b pb-2 flex items-center gap-2">
+                    <i data-lucide="thermometer" class="text-pink-500"></i> บันทึกการตรวจวันนี้
+                </h3>
+
+                <div>
+                    <label class="text-sm text-gray-500">ชื่อผู้ป่วย</label>
+                    <input type="text" id="screen_name" required class="w-full p-3 bg-gray-50 rounded-lg border focus:ring-2 focus:ring-pink-300 outline-none">
+                </div>
+                
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                         <label class="text-sm text-gray-500">อายุ</label>
+                         <input type="number" id="screen_age" class="w-full p-3 bg-gray-50 rounded-lg border">
+                    </div>
+                    <div>
+                         <label class="text-sm text-gray-500">เพศ</label>
+                         <select id="screen_gender" class="w-full p-3 bg-gray-50 rounded-lg border">
+                             <option>ชาย</option>
+                             <option>หญิง</option>
+                         </select>
+                    </div>
+                    <div class="col-span-2">
+                         <label class="text-sm text-red-500 font-bold">โรคประจำตัว/แพ้ยา (ดึงจากประวัติ)</label>
+                         <input type="text" id="screen_history_display" readonly class="w-full p-3 bg-red-50 text-red-700 rounded-lg border border-red-100" placeholder="-">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="text-sm text-gray-500">อาการสำคัญ (CC)</label>
+                    <textarea id="symptoms" rows="2" class="w-full p-3 bg-gray-50 rounded-lg border focus:outline-none focus:ring-2 focus:ring-pink-300" placeholder="เช่น ปวดหัว ตัวร้อน..."></textarea>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="col-span-2 grid grid-cols-2 gap-2 bg-blue-50 p-3 rounded-xl border border-blue-100">
+                        <div class="col-span-2 text-xs font-bold text-blue-800 flex items-center gap-1"><i data-lucide="heart" class="w-3"></i> BP (mmHg)</div>
+                        <input type="number" id="sys_bp" oninput="calculateTriage()" placeholder="120" class="p-2 rounded border text-center text-lg font-bold text-blue-900">
+                        <input type="number" id="dia_bp" placeholder="80" class="p-2 rounded border text-center text-lg font-bold text-blue-900">
+                    </div>
+                    <div class="bg-orange-50 p-3 rounded-xl border border-orange-100">
+                        <label class="text-xs font-bold text-orange-800 block mb-1">Temp (°C)</label>
+                        <input type="number" id="temp" step="0.1" oninput="calculateTriage()" class="w-full p-2 rounded border text-center text-lg font-bold text-orange-900">
+                    </div>
+                    <div class="bg-red-50 p-3 rounded-xl border border-red-100">
+                        <label class="text-xs font-bold text-red-800 block mb-1">Pulse</label>
+                        <input type="number" id="pr" class="w-full p-2 rounded border text-center text-lg font-bold text-red-900">
+                    </div>
+                    <div class="bg-purple-50 p-3 rounded-xl border border-purple-100">
+                        <label class="text-xs font-bold text-purple-800 block mb-1">Resp</label>
+                        <input type="number" id="rr" oninput="calculateTriage()" class="w-full p-2 rounded border text-center text-lg font-bold text-purple-900">
+                    </div>
+                    <div class="bg-gray-100 p-3 rounded-xl border border-gray-200">
+                        <label class="text-xs font-bold text-gray-800 block mb-1">Pain (0-10)</label>
+                        <input type="number" id="pain_score" oninput="calculateTriage()" class="w-full p-2 rounded border text-center text-lg font-bold text-gray-900">
+                    </div>
+                </div>
+
+                <div id="triage-box" class="p-4 rounded-xl border-2 text-center bg-gray-100 text-gray-500 border-gray-300">
+                    <div class="text-sm font-semibold uppercase tracking-wider">ผลประเมิน</div>
+                    <div id="triage-label" class="text-2xl font-black mt-1">รอประเมิน</div>
+                </div>
+
+                <button type="submit" class="w-full bg-pink-600 text-white p-4 rounded-xl font-bold text-lg shadow hover:bg-pink-700 flex justify-center gap-2">
+                    <i data-lucide="send"></i> ส่งตรวจแพทย์
+                </button>
+            </form>
+        </div>
         
-        // ดึงเฉพาะคนที่สถานะยังไม่ใช่ "ตรวจแล้ว" (หรือว่างๆ คือรอตรวจ)
-        if (status !== "ตรวจแล้ว") {
-          visits.push({
-            time: row[1],
-            name: row[2],
-            age: row[3],
-            gender: row[4],
-            symptoms: row[5],
-            triage: row[6],
-            vitals: {
-              bp: row[7],
-              temp: row[8],
-              pr: row[9],
-              rr: row[10],
-              pain_score: row[11]
+        <div id="loading-overlay" class="hidden fixed inset-0 bg-black/50 z-50 flex flex-col items-center justify-center">
+            <div class="bg-white p-6 rounded-2xl flex flex-col items-center shadow-2xl">
+                <i data-lucide="loader" class="animate-spin text-pink-500 w-10 h-10 mb-2"></i>
+                <span class="text-gray-800 font-bold">กำลังประมวลผล...</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- DOCTOR SCREEN -->
+    <div id="view-doctor" class="hidden min-h-screen pb-10 bg-slate-100">
+        <div class="bg-white shadow-sm p-4 sticky top-0 z-10 flex justify-between items-center border-b">
+            <div class="flex items-center gap-2 text-blue-700 font-bold text-lg">
+                <i data-lucide="activity"></i> แพทย์: รอตรวจ (<span id="patient-count">0</span>)
+            </div>
+            <div class="flex gap-2">
+                <button onclick="fetchPatients()" class="p-2 bg-blue-50 text-blue-600 rounded hover:bg-blue-100"><i data-lucide="refresh-cw" id="refresh-icon"></i></button>
+                <button onclick="logout()" class="text-gray-500 hover:text-red-500 text-sm px-2">ออก</button>
+            </div>
+        </div>
+        <div class="max-w-4xl mx-auto p-4" id="patient-list">
+            <div class="text-center py-20 text-gray-400">กำลังโหลด...</div>
+        </div>
+    </div>
+
+    <script>
+        // ********* URL Apps Script ของคุณ *********
+        const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxf0EELAOic-M4OXZKXeUNb-SJzvz5E_utfAbzVuT9dAbsdf9ztHXnC9YV06Y1cdZU/exec";
+        
+        // ********* 🔑 ตั้งรหัสผ่านแพทย์ที่นี่ *********
+        const DOCTOR_PASSWORD = "1234";
+        // *****************************************
+
+        let currentTriageLevel = 'gray';
+        let refreshInterval;
+
+        document.addEventListener('DOMContentLoaded', () => lucide.createIcons());
+
+        // --- NAVIGATION ---
+        function switchRole(role) {
+            if (role === 'doctor') {
+                const pass = prompt("กรุณาระบุรหัสผ่านสำหรับแพทย์ (Password):");
+                if (pass !== DOCTOR_PASSWORD) {
+                    alert("⛔ รหัสผ่านไม่ถูกต้อง!");
+                    return;
+                }
             }
-          });
+
+            document.getElementById('view-login').classList.add('hidden');
+            if(role === 'nurse') {
+                document.getElementById('view-nurse').classList.remove('hidden');
+                switchTab('screening'); 
+            } else {
+                document.getElementById('view-doctor').classList.remove('hidden');
+                fetchPatients();
+                refreshInterval = setInterval(fetchPatients, 10000);
+            }
         }
-      }
-      return createJsonResponse(visits);
-    }
-  } catch (error) {
-    return createJsonResponse({ result: "error", message: error.toString() });
-  }
-}
 
-// -------------------------------------------------------------
-// จัดการ HTTP POST (การบันทึกข้อมูล)
-// -------------------------------------------------------------
-function doPost(e) {
-  setup();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  try {
-    // รับข้อมูลที่ส่งมาจาก Frontend
-    let data;
-    if (e.postData.type === "application/json") {
-      data = JSON.parse(e.postData.contents);
-    } else {
-      // รองรับกรณี no-cors ที่ frontend ส่งมาเป็น text/plain
-      data = JSON.parse(e.postData.contents);
-    }
-    
-    // 1. บันทึกลงทะเบียนคนไข้ใหม่
-    if (data.action === 'register') {
-      const sheet = ss.getSheetByName(SHEET_PATIENTS);
-      sheet.appendRow([
-        new Date(),       // Timestamp
-        data.cid,         // CID
-        data.name,        // Name
-        data.dob,         // DOB
-        data.age,         // Age
-        data.gender,      // Gender
-        data.phone,       // Phone
-        data.rights,      // Rights
-        data.congenital,  // Congenital
-        data.allergy      // Allergy
-      ]);
-      return createJsonResponse({ result: "success", message: "Patient registered" });
-    }
-    
-    // 2. บันทึกข้อมูลคัดกรอง (ส่งเข้าคิวตรวจ)
-    else if (data.action === 'visit') {
-      const sheet = ss.getSheetByName(SHEET_VISITS);
-      sheet.appendRow([
-        new Date(),                 // Timestamp
-        data.time,                  // Time
-        data.name,                  // Name
-        data.age,                   // Age
-        data.gender,                // Gender
-        data.symptoms,              // Symptoms
-        data.triage,                // Triage
-        data.vitals.bp,             // BP
-        data.vitals.temp,           // Temp
-        data.vitals.pr,             // PR
-        data.vitals.rr,             // RR
-        data.vitals.pain_score,     // Pain Score
-        "รอตรวจ"                     // Status
-      ]);
-      return createJsonResponse({ result: "success", message: "Visit recorded" });
-    }
-    
-    return createJsonResponse({ result: "error", message: "Unknown action" });
-    
-  } catch (error) {
-    return createJsonResponse({ result: "error", message: error.toString() });
-  }
-}
+        function switchTab(tab) {
+            const btnReg = document.getElementById('btn-tab-register');
+            const btnScreen = document.getElementById('btn-tab-screening');
+            const formReg = document.getElementById('form-register');
+            const formScreen = document.getElementById('form-screening');
 
-// -------------------------------------------------------------
-// ฟังก์ชันสำหรับแปลงข้อมูลเป็น JSON เพื่อส่งกลับไปยัง Frontend
-// -------------------------------------------------------------
-function createJsonResponse(responseObject) {
-  return ContentService.createTextOutput(JSON.stringify(responseObject))
-    .setMimeType(ContentService.MimeType.JSON);
-}
+            if (tab === 'register') {
+                btnReg.className = "flex-1 p-4 text-center tab-active transition cursor-default";
+                btnScreen.className = "flex-1 p-4 text-center tab-inactive transition cursor-pointer hover:bg-gray-50";
+                formReg.classList.remove('hidden');
+                formScreen.classList.add('hidden');
+            } else {
+                btnReg.className = "flex-1 p-4 text-center tab-inactive transition cursor-pointer hover:bg-gray-50";
+                btnScreen.className = "flex-1 p-4 text-center tab-active transition cursor-default";
+                formReg.classList.add('hidden');
+                formScreen.classList.remove('hidden');
+                calculateTriage(); 
+            }
+        }
+
+        function logout() {
+            clearInterval(refreshInterval);
+            location.reload(); 
+        }
+
+        // --- REAL SEARCH FUNCTION (GET Method) ---
+        async function searchPatient() {
+            const keyword = document.getElementById('search_input').value;
+            const resultBox = document.getElementById('search_results');
+            const statusBox = document.getElementById('search_status');
+            
+            if(!keyword) { alert("กรุณาพิมพ์ชื่อหรือเลขบัตร"); return; }
+
+            // Show Loading
+            statusBox.classList.remove('hidden');
+            resultBox.classList.add('hidden');
+            resultBox.innerHTML = '';
+
+            try {
+                // ใช้ GET Method เพื่อดึงข้อมูลจริงจาก Backend
+                const response = await fetch(`${SCRIPT_URL}?action=search&keyword=${encodeURIComponent(keyword)}`);
+                const json = await response.json();
+
+                statusBox.classList.add('hidden');
+                resultBox.classList.remove('hidden');
+
+                if (json.result === "success" && json.data.length > 0) {
+                    resultBox.innerHTML = json.data.map(p => `
+                        <div onclick="selectPatient('${p.name}', '${p.age}', '${p.gender}', '${p.congenital || '-'}', '${p.allergy || '-'}' )" 
+                             class="search-result-item p-3 border-b flex justify-between items-center hover:bg-pink-50 cursor-pointer transition">
+                            <div>
+                                <div class="font-bold text-gray-800">${p.name}</div>
+                                <div class="text-xs text-gray-500">CID: ${p.cid}</div>
+                            </div>
+                            <div class="text-right text-xs">
+                                ${p.allergy && p.allergy !== '-' ? `<span class="text-red-600 font-bold bg-red-50 px-2 py-1 rounded">แพ้: ${p.allergy}</span>` : '<span class="text-green-600">ไม่แพ้ยา</span>'}
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    resultBox.innerHTML = '<div class="p-4 text-center text-gray-400">ไม่พบข้อมูลผู้ป่วย</div>';
+                }
+            } catch (e) {
+                console.error(e);
+                statusBox.classList.add('hidden');
+                resultBox.classList.remove('hidden');
+                resultBox.innerHTML = '<div class="p-4 text-center text-red-500">เกิดข้อผิดพลาดในการเชื่อมต่อ (CORS หรือ Network)</div>';
+            }
+        }
+
+        function selectPatient(name, age, gender, congenital, allergy) {
+            document.getElementById('screen_name').value = name;
+            document.getElementById('screen_age').value = age;
+            document.getElementById('screen_gender').value = gender;
+            document.getElementById('screen_history_display').value = `โรค: ${congenital} | แพ้: ${allergy}`;
+            
+            // ซ่อนกล่องค้นหา
+            document.getElementById('search_results').classList.add('hidden');
+            document.getElementById('search_input').value = '';
+            
+            // แจ้งเตือนถ้าแพ้ยา
+            if(allergy !== '-' && allergy !== '') {
+                alert(`⚠️ แจ้งเตือนสำคัญ: ผู้ป่วยมีประวัติแพ้ยา "${allergy}"`);
+            }
+        }
+
+        // --- REGISTER ---
+        function calculateAge() {
+            const dob = document.getElementById('reg_dob').value;
+            if(!dob) return;
+            const birthDate = new Date(dob);
+            const today = new Date();
+            let age = today.getFullYear() - birthDate.getFullYear();
+            const m = today.getMonth() - birthDate.getMonth();
+            if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) age--;
+            document.getElementById('reg_age').value = age;
+        }
+
+        async function submitRegister(e) {
+            e.preventDefault();
+            toggleLoading(true);
+            const form = e.target;
+            const data = {
+                action: 'register',
+                cid: form.cid.value, name: form.name.value, dob: form.dob.value,
+                age: form.age.value, gender: form.gender.value, phone: form.phone.value,
+                rights: form.rights.value, congenital: form.congenital.value, allergy: form.allergy.value
+            };
+            await sendData(data);
+            form.reset();
+            alert("✅ ลงทะเบียนสำเร็จ");
+            switchTab('screening');
+            selectPatient(data.name, data.age, data.gender, data.congenital, data.allergy);
+        }
+        
+        // --- SCREENING ---
+        function calculateTriage() {
+            const sys = Number(document.getElementById('sys_bp').value) || 0;
+            const temp = Number(document.getElementById('temp').value) || 0;
+            const rr = Number(document.getElementById('rr').value) || 0;
+            const pain = Number(document.getElementById('pain_score').value) || 0;
+            
+            const box = document.getElementById('triage-box');
+            const label = document.getElementById('triage-label');
+            box.className = "p-4 rounded-xl border-2 text-center transition-all bg-gray-100 text-gray-500 border-gray-300";
+
+            if (sys === 0 && temp === 0) { currentTriageLevel = 'gray'; label.innerText = 'รอประเมิน'; } 
+            else if (sys < 90 || rr > 30 || pain > 9) { currentTriageLevel = 'red'; box.classList.add('bg-red-100', 'text-red-800', 'border-red-500'); label.innerText = 'ฉุกเฉิน (Emergency)'; } 
+            else if (sys > 160 || temp > 38.0 || pain > 6) { currentTriageLevel = 'yellow'; box.classList.add('bg-yellow-100', 'text-yellow-800', 'border-yellow-500'); label.innerText = 'เร่งด่วน (Urgent)'; } 
+            else { currentTriageLevel = 'green'; box.classList.add('bg-green-100', 'text-green-800', 'border-green-500'); label.innerText = 'ปกติ (Non-Urgent)'; }
+        }
+
+        async function submitScreening(e) {
+            e.preventDefault();
+            toggleLoading(true);
+            const data = {
+                action: 'visit',
+                name: document.getElementById('screen_name').value,
+                age: document.getElementById('screen_age').value,
+                gender: document.getElementById('screen_gender').value,
+                symptoms: document.getElementById('symptoms').value,
+                triage: currentTriageLevel,
+                time: new Date().toLocaleTimeString('th-TH', {hour:'2-digit', minute:'2-digit'}),
+                vitals: {
+                    bp: document.getElementById('sys_bp').value + '/' + document.getElementById('dia_bp').value,
+                    temp: document.getElementById('temp').value,
+                    pr: document.getElementById('pr').value,
+                    rr: document.getElementById('rr').value,
+                    pain_score: document.getElementById('pain_score').value
+                }
+            };
+            await sendData(data);
+            document.getElementById('form-screening').reset();
+            document.getElementById('screen_history_display').value = '';
+            calculateTriage();
+            alert("✅ ส่งตรวจเรียบร้อย");
+        }
+
+        async function sendData(jsonData) {
+            try {
+                await fetch(SCRIPT_URL, {
+                    method: 'POST', mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(jsonData)
+                });
+            } catch (err) { alert("Error: " + err); } 
+            finally { toggleLoading(false); }
+        }
+
+        function toggleLoading(show) {
+            const el = document.getElementById('loading-overlay');
+            show ? el.classList.remove('hidden') : el.classList.add('hidden');
+        }
+
+        async function fetchPatients() {
+            try {
+                const res = await fetch(SCRIPT_URL);
+                const data = await res.json();
+                const priority = { 'red': 3, 'yellow': 2, 'green': 1, 'gray': 0 };
+                
+                // Sort
+                const sorted = data.reverse().sort((a,b) => {
+                    const tA = a.triage || 'gray';
+                    const tB = b.triage || 'gray';
+                    return (priority[tB] || 0) - (priority[tA] || 0);
+                });
+
+                document.getElementById('patient-count').innerText = sorted.length;
+
+                if (sorted.length === 0) {
+                     document.getElementById('patient-list').innerHTML = '<div class="text-center py-20 text-gray-400">ยังไม่มีผู้ป่วยรอตรวจ</div>';
+                     return;
+                }
+
+                document.getElementById('patient-list').innerHTML = sorted.map(p => {
+                    const triage = p.triage || 'gray';
+                    const triageChar = triage.charAt(0).toUpperCase();
+                    
+                    // Define classes explicitly for Tailwind CDN to detect
+                    let borderClass = 'border-gray-300';
+                    let bgIconClass = 'bg-gray-400';
+                    
+                    if (triage === 'red') {
+                        borderClass = 'border-red-500';
+                        bgIconClass = 'bg-red-500';
+                    } else if (triage === 'yellow') {
+                        borderClass = 'border-yellow-500';
+                        bgIconClass = 'bg-yellow-500';
+                    } else if (triage === 'green') {
+                        borderClass = 'border-green-500';
+                        bgIconClass = 'bg-green-500';
+                    }
+
+                    return `
+                    <div class="bg-white rounded-xl shadow-sm border-l-8 ${borderClass} p-4 mb-3 flex gap-4 hover:shadow-md transition">
+                        <div class="flex-col flex items-center justify-center w-16">
+                            <div class="w-12 h-12 rounded-full ${bgIconClass} text-white flex items-center justify-center font-bold text-xl shadow-sm">
+                                ${triageChar}
+                            </div>
+                            <span class="text-xs text-gray-500 mt-2 font-bold">${p.time}</span>
+                        </div>
+                        <div class="flex-1">
+                            <div class="flex items-center gap-2">
+                                <h3 class="font-bold text-lg text-gray-800">${p.name}</h3>
+                                <span class="text-sm text-gray-500 font-normal">(${p.age} ปี)</span>
+                            </div>
+                            <div class="text-gray-600 mb-2">${p.symptoms}</div>
+                            <div class="flex gap-2 text-sm">
+                                <span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">BP: ${p.vitals?.bp || '-'}</span>
+                                <span class="bg-gray-100 text-gray-600 px-2 py-1 rounded">Temp: ${p.vitals?.temp || '-'}</span>
+                            </div>
+                        </div>
+                        <button class="bg-blue-600 hover:bg-blue-700 text-white px-6 rounded-lg self-center h-10 shadow font-semibold transition">
+                            ตรวจ
+                        </button>
+                    </div>`;
+                }).join('');
+            } catch(e) { 
+                console.error(e);
+                document.getElementById('patient-list').innerHTML = `<div class="text-center text-red-500 py-10">เกิดข้อผิดพลาด: ${e.message}</div>`;
+            }
+        }
+    </script>
+</body>
+</html>
+
